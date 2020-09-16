@@ -1,0 +1,15 @@
+---
+
+- name: install epel-release
+  package:
+    name: epel-release
+
+- name: install main packages
+  package:
+    name: '{{ elb_packages }}'
+  delay: 10
+  retries: 3
+  register: result
+  until: result is succeeded
+
+

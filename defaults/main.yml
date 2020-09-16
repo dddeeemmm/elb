@@ -1,0 +1,7 @@
+---
+
+elb_install: true
+elb_haproxy_services: []
+elb_haproxy_certs: []
+
+nolog: true

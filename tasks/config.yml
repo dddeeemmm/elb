@@ -1,0 +1,45 @@
+---
+
+- name: place systemd unit
+  template:
+    src: haproxy.service.j2
+    dest: /usr/lib/systemd/system/haproxy.service
+  register: place_systemd_unit
+
+- name: daemon-reload
+  service:
+    daemon_reload: yes
+  when: place_systemd_unit is changed
+
+- name: make certs dir
+  file:
+    state: directory
+    path: '{{ elb_haproxy_certs_dir }}'
+
+- name: place certs
+  copy:
+    src: '{{ item }}'
+    dest: '{{ elb_haproxy_certs_dir }}/{{ item | basename }}'
+  with_items: '{{ elb_haproxy_certs }}'
+
+- name: place haproxy config
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    backup: yes
+    validate: /usr/sbin/haproxy -f %s -c -q
+  register: place_haproxy_config
+  no_log: '{{ nolog }}'
+
+- name: enable and start services
+  systemd:
+    name: '{{ item }}'
+    enabled: yes
+    state: started
+  with_items: '{{ elb_haproxy_services }}'
+
+- name: reload haproxy
+  systemd:
+    name: haproxy
+    state: reloaded
+  when: place_haproxy_config is changed

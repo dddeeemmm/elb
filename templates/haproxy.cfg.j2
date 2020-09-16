@@ -1,0 +1,119 @@
+# Ansible Managed
+
+global
+  log         127.0.0.1 len 65535 local2
+
+  chroot      /var/lib/haproxy
+  pidfile     /var/run/haproxy.pid
+
+  maxconn     4000
+  user        haproxy
+  group       haproxy
+  daemon
+
+  # turn on stats unix socket
+  stats socket /var/lib/haproxy/stats
+
+  # utilize system-wide crypto-policies
+  tune.ssl.default-dh-param     2048
+  ssl-default-bind-ciphers      ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+  ssl-default-bind-options      no-sslv3 no-tls-tickets
+  ssl-default-server-ciphers    ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+  ssl-default-server-options    no-sslv3 no-tlsv10
+
+
+defaults
+  mode                      http
+
+  log                       global
+  log-format                '{"created_at":\ "%%Ts","app":\ "%%b","remote_addr_ip":\ "%%ci","body_bytes_sent":\ "%%U","request_time":\ "%%Ta","status":"%%ST","request":\ "%%HU","request_method":\ "%%HM","http_referrer":\ "%%HP","request_body":\ "%%HQ","message":\ "%%Ts\ %%ci%%U\ %%Ta\ %%ST\ %%HU\ %%HM\ %%HP\ %%HQ","server_name":\ "%%s","frontend_name":\ "%%f","hostname":\ "%%H","HAProxy_process_ID":\ "%%pid","number_of_retries":\ "%%rc","server_concurrent_connections":\ "%%sc","unique_ID":\ "%%ID","total_session_duration_time":\ "%%Tt","backend_source_IP":\ "%%bi","idle_time_before_the_HTTP_request":\ "%%Ti","time_to_get_the_client_request":\ "%%Tq","time_to_receive_the_full_request_from_first_byte":\ "%%TR","tag":\ "elb"}'
+
+  option                    dontlognull
+  option                    http-server-close
+  option                    forwardfor except 127.0.0.0/8 if-none
+  option                    redispatch
+  retries                   3
+  timeout http-request      10s
+  timeout queue             1m
+  timeout connect           10s
+  timeout client            1m
+  timeout server            1m
+  timeout http-keep-alive   10s
+  timeout check             10s
+  maxconn                   10000
+
+
+listen stats
+  bind {{ ansible_default_ipv4.address }}:8080
+
+  acl forbidden_methods method TRACE TRACK
+  http-request deny if forbidden_methods
+
+  stats enable
+  stats realm Haproxy\ Statistics
+  stats uri /stats
+  stats show-node
+  stats show-legends
+  stats auth {{ elb_haproxy_uname }}:{{ elb_haproxy_password }}
+  stats admin if TRUE
+  stats refresh 60s
+
+
+frontend main
+  # binds
+  bind {{ ansible_default_ipv4.address }}:80
+  bind {{ ansible_default_ipv4.address }}:443 ssl {% for cert in elb_haproxy_certs %} crt {{ elb_haproxy_certs_dir }}/{{ cert | basename }}{% endfor %}
+
+  # security headers
+  http-response set-header X-Frame-Options "DENY"
+  http-response set-header X-XSS-Protection "1;\ mode=block"
+  http-response set-header X-Content-Type-Options "nosniff"
+  http-response set-header Strict-Transport-Security "max-age=31536000;\ includeSubDomains;\ preload"
+  http-response set-header X-Frame-Options SAMEORIGIN
+  http-response set-header Referrer-Policy no-referrer-when-downgrade
+  # acl
+  acl forbidden_methods method TRACE TRACK
+  acl src_internal src {{ elb_haproxy_src_internal }}
+  # rules
+  http-request deny if forbidden_methods
+  redirect scheme https if !{ ssl_fc }
+  rspidel ^Server:.*
+
+{% for service in elb_haproxy_services %}
+  # {{ service.hostname }}
+  acl {{ service.hostname }} hdr(host) -i {{ service.hostname }}
+{% if service.acl is defined %}
+{% for acl in service.acl %}
+  acl {{ acl.name }} {{ acl.value }}
+{% endfor %}
+{% endif %}
+{% if service.redirect is defined %}
+  http-request redirect location {{ service.redirect }} if {{ service.hostname }}
+{% endif %}
+{% if service.allow_all is defined and service.allow_all %}
+  use_backend {{ service.hostname }} if {{ service.hostname }}
+{% endif %}
+{% if service.rules is defined %}
+{% for rule in service.rules %}
+  use_backend {{ service.hostname }} if {{ service.hostname }} {{ rule }}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+
+{% for service in elb_haproxy_services %}
+{% if service.backends is defined %}
+backend {{ service.hostname }}
+{% if service.headers is defined %}
+  {% for header in service.headers %}
+{{ header }}
+{% endfor %}
+{% endif %}
+  balance leastconn
+  default-server inter 2000 rise 2 fall 5
+{% for backend in service.backends %}
+  server {{ service.hostname }} {{ backend }} check
+
+{% endfor %}
+{% endif %}
+{% endfor %}

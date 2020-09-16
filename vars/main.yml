@@ -1,0 +1,13 @@
+---
+
+elb_packages:
+  - haproxy             # TCP/HTTP proxy and load balancer for high availability environments
+  - pcp-pmda-haproxy    # Performance Co-Pilot (PCP) metrics for HAProxy
+
+elb_haproxy_services:
+  - haproxy
+
+elb_haproxy_certs_dir: /etc/haproxy/crt
+
+elb_haproxy_uname: hadmin
+elb_haproxy_password: password
